@@ -1,4 +1,4 @@
-package com.test;
+package com.api;
 
 
 public class Main {
