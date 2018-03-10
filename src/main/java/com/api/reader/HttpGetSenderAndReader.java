@@ -1,114 +1,90 @@
 package com.api.reader;
 
-import org.apache.commons.validator.UrlValidator;
+import com.api.reader.exceptions.CustomIOException;
+import com.api.reader.exceptions.CustomIllegalArgumentException;
+import com.api.reader.exceptions.CustomURISyntaxException;
+import com.api.reader.exceptions.NoDataReceivedException;
+import org.apache.http.client.utils.URIBuilder;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.Map;
 
-public class HttpGetSenderAndReader implements HttpReader {
+public abstract class HttpGetSenderAndReader implements HttpReader {
     
-    private static final HttpGetSenderAndReader INSTANCE = new HttpGetSenderAndReader();
+    private HttpGetValidator httpGetValidator = HttpGetValidator.getInstance();
     
-    private HttpGetSenderAndReader() {
-        throw new AssertionError("This class is expected to be constructed with abstract factory, " +
-                "see documentation for available methods.");
-    }
+    HttpGetSenderAndReader() {}
     
-    public static HttpGetSenderAndReader getInstance() {
-        return INSTANCE;
+    @Override
+    public JSONArray sendRequest(String request) throws CustomIllegalArgumentException, CustomIOException,
+            NoDataReceivedException {
+        if (!httpGetValidator.validateStringRequest(request))
+            throw new CustomIllegalArgumentException("Given request URL is not valid.");
+    
+        try {
+            return executeRequest(request);
+        } catch (IOException e) {
+            throw new CustomIllegalArgumentException(e.getMessage());
+        }
     }
 
     @Override
-    public JSONObject sendRequest(String request) throws IllegalArgumentException, IOException {
-        if (!validateStringRequest(request))
-            throw new IllegalArgumentException("Given request URL is not valid.");
+    public JSONArray sendRequest(String url, Map<String, String> keyValue) throws CustomIllegalArgumentException,
+            CustomIOException, CustomURISyntaxException, NoDataReceivedException {
+        if (!httpGetValidator.validateCollectionRequest(keyValue))
+            throw new CustomIllegalArgumentException("Given Map collection is not valid");
 
-        return executeRequest(request);
-    }
-
-    @Override
-    public JSONObject sendRequest(String url, Map<String, String> keyValue) throws IllegalArgumentException, IOException {
-        if (!validateCollectionRequest(keyValue))
-            throw new IllegalArgumentException("Given Map collection is not valid");
-
-        String request = buildRequest(url, keyValue);
-
-        return executeRequest(request);
-    }
-
-    private String buildRequest(String url, Map<String, String> keyValue) {
-        StringBuilder sb = new StringBuilder(url);
-        if (url.lastIndexOf('?') != url.length()) {
-            if (url.lastIndexOf('/') != url.length())
-                sb.append("/?");
+        try {
+            String request = buildRequest(url, keyValue);
+            return executeRequest(request);
+        } catch (URISyntaxException e) {
+            throw new CustomURISyntaxException(e);
+        } catch (IOException e) {
+            throw new CustomIOException(e.getMessage());
         }
-        else if (url.lastIndexOf('/') != url.length() - 1)
-            sb.append("/?");
 
+    }
+
+    private String buildRequest(String url, Map<String, String> keyValue) throws CustomURISyntaxException {
+        URIBuilder uriBuilder;
+        try {
+            uriBuilder = new URIBuilder(url);
+        } catch (URISyntaxException e) {
+            throw new CustomURISyntaxException(e);
+        }
+    
+        // put key=value into uri
         for (Map.Entry<String, String> entrySet : keyValue.entrySet()) {
-            sb.append(entrySet.getKey());
-            sb.append('=');
-            sb.append(entrySet.getValue());
-            sb.append('&');
+            uriBuilder.addParameter(entrySet.getKey(), entrySet.getValue());
         }
-        int index = sb.lastIndexOf("&");
-        sb.replace(index, index, "");
-        return sb.toString();
+        
+        return uriBuilder.toString();
     }
 
-    private boolean validateStringRequest(String request) {
-        UrlValidator urlValidator = new UrlValidator();
-        if (!urlValidator.isValid(request))
-            return false;
-
-        if (request.contains("=") || request.contains("&"))
-            return validateKeyValueRequest(request);
-        else
-            return validateOtherRequest(request);
-    }
-
-    private boolean validateCollectionRequest(Map<String, String> keyValue) {
-        for (Map.Entry<String, String> entrySet : keyValue.entrySet()) {
-            if (!isKeyAndValueValid(entrySet.getKey(), entrySet.getValue()))
-                return false;
-        }
-        return true;
-    }
-
-    private boolean isKeyAndValueValid(String key, String value) {
-        return key != null && key.length() != 0 && value != null && value.length() != 0;
-    }
-
-    private boolean validateKeyValueRequest(String request) {
-        String requestCopy = request;
-        int countEqualsSymbols = request.length() - requestCopy.replace("=", "").length();
-        requestCopy = request;
-        int countAmpersandSymbols = request.length() - requestCopy.replace("&", "").length();
-
-        return countEqualsSymbols + 1 == countAmpersandSymbols;
-    }
-
-    private boolean validateOtherRequest(String request) {
-        return true;
-    }
-
-    private JSONObject executeRequest(String request) throws IOException {
+    private JSONArray executeRequest(String request) throws IOException, NoDataReceivedException {
         URL url = new URL(request);
         URLConnection urlConnection = url.openConnection();
         InputStream inputStream = urlConnection.getInputStream();
         BufferedReader br = new BufferedReader(new InputStreamReader(inputStream));
 
         String line = br.readLine();
-        if (line != null && line.length() > 0)
-            return new JSONObject(line);
-
-        else
-            return new JSONObject();
+        if (line == null || line.length() == 0)
+            throw new NoDataReceivedException(request);
+        
+        if (line.startsWith("[") && line.endsWith("]"))
+            return new JSONArray(line);
+        else {
+            JSONArray jsonArray = new JSONArray();
+            jsonArray.put(new JSONObject(line));
+            return jsonArray;
+        }
     }
 }
